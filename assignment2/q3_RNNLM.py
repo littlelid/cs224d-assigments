@@ -37,7 +37,9 @@ class RNNLM_Model(LanguageModel):
   def load_data(self, debug=False):
     """Loads starter word-vectors and train/dev/test data."""
     self.vocab = Vocab()
+    #print '***'
     self.vocab.construct(get_ptb_dataset('train'))
+    #print '!!!'
     self.encoded_train = np.array(
         [self.vocab.encode(word) for word in get_ptb_dataset('train')],
         dtype=np.int32)
@@ -79,7 +81,10 @@ class RNNLM_Model(LanguageModel):
     (Don't change the variable names)
     """
     ### YOUR CODE HERE
-    raise NotImplementedError
+    self.input_placeholder = tf.placeholder(tf.int32,(None,self.config.num_steps))
+    self.labels_placeholder = tf.placeholder(tf.int32, (None, self.config.num_steps))
+    self.dropout_placeholder = tf.placeholder(tf.float32, )
+    #raise NotImplementedError
     ### END YOUR CODE
   
   def add_embedding(self):
@@ -101,7 +106,16 @@ class RNNLM_Model(LanguageModel):
     # The embedding lookup is currently only implemented for the CPU
     with tf.device('/cpu:0'):
       ### YOUR CODE HERE
-      raise NotImplementedError
+      embedding = tf.get_variable('Embedding', [len(self.vocab), self.config.embed_size])
+      inputs = tf.nn.embedding_lookup(embedding, self.input_placeholder)
+      # ? * 10 * 50
+      slices = tf.split(1, self.config.num_steps, inputs)
+      inputs = [tf.squeeze(x, 1) for x in slices]
+      #print len(slices), len(inputs)
+      #print slices[0].get_shape(), inputs[0].get_shape()
+      #print len(slices)
+      #print inputs.get_shape()
+      #raise NotImplementedError
       ### END YOUR CODE
       return inputs
 
@@ -125,7 +139,14 @@ class RNNLM_Model(LanguageModel):
                (batch_size, len(vocab)
     """
     ### YOUR CODE HERE
-    raise NotImplementedError
+    with tf.variable_scope('Projection'):
+        U = tf.get_variable('U', [self.config.hidden_size, len(self.vocab)])
+        b_2 = tf.get_variable('b_2', [len(self.vocab)])
+
+        outputs = [tf.matmul(h, U) + b_2 for h in rnn_outputs]
+    
+        
+    #raise NotImplementedError
     ### END YOUR CODE
     return outputs
 
@@ -140,8 +161,21 @@ class RNNLM_Model(LanguageModel):
       loss: A 0-d tensor (scalar)
     """
     ### YOUR CODE HERE
-    raise NotImplementedError
+    #sequence_loss(logits, targets, weights)     
+    #[batch_size x num_decoder_symbols].    list time_step
+    #1D batch-sized int32 Tensors                list 
+    #1D batch-sized float-Tensors                list
+    #self.labels_placeholder = tf.placeholder(tf.float32, (None, self.config.num_steps))
+    weight = [tf.ones([self.config.batch_size * self.config.num_steps], tf.float32)]
+    target = [tf.reshape(self.labels_placeholder, [-1])]
+    ce_loss = sequence_loss([output], target, weight )
+    tf.add_to_collection('total_loss', ce_loss)
+
+    loss = tf.add_n(tf.get_collection('total_loss'))
+    #raise NotImplementedError
     ### END YOUR CODE
+
+
     return loss
 
   def add_training_op(self, loss):
@@ -164,13 +198,19 @@ class RNNLM_Model(LanguageModel):
       train_op: The Op for training.
     """
     ### YOUR CODE HERE
-    raise NotImplementedError
+    optmizer = tf.train.AdamOptimizer(learning_rate=self.config.lr)
+    train_op = optmizer.minimize(loss)
+    
+    
+    #raise NotImplementedError
     ### END YOUR CODE
     return train_op
   
   def __init__(self, config):
     self.config = config
+    #print '###'
     self.load_data(debug=False)
+    #print '&&&'
     self.add_placeholders()
     self.inputs = self.add_embedding()
     self.rnn_outputs = self.add_model(self.inputs)
@@ -182,7 +222,7 @@ class RNNLM_Model(LanguageModel):
     self.predictions = [tf.nn.softmax(tf.cast(o, 'float64')) for o in self.outputs]
     # Reshape the output into len(vocab) sized chunks - the -1 says as many as
     # needed to evenly divide
-    output = tf.reshape(tf.concat(1, self.outputs), [-1, len(self.vocab)])
+    output = tf.reshape(tf.concat(1, self.outputs), [-1, len(self.vocab)])#
     self.calculate_loss = self.add_loss_op(output)
     self.train_step = self.add_training_op(self.calculate_loss)
 
@@ -226,7 +266,27 @@ class RNNLM_Model(LanguageModel):
                a tensor of shape (batch_size, hidden_size)
     """
     ### YOUR CODE HERE
-    raise NotImplementedError
+    outputs = []
+    with tf.variable_scope('InputDropout'):
+        inputs = [tf.nn.dropout(x, self.dropout_placeholder) for x in inputs]
+    with tf.variable_scope('RNN') as scope:
+        self.initial_state = tf.zeros([self.config.batch_size, self.config.hidden_size])
+        state = self.initial_state
+        
+        for idx, embed in enumerate(inputs):
+            if idx > 0:
+                scope.reuse_variables()
+            
+            H = tf.get_variable('H', [self.config.hidden_size, self.config.hidden_size])
+            I = tf.get_variable('I', [self.config.embed_size,  self.config.hidden_size])
+            b_1 = tf.get_variable('b_1', [self.config.hidden_size])
+            state = tf.nn.sigmoid(tf.matmul(state, H) + tf.matmul(embed, I) + b_1)
+            
+            outputs.append(state)
+    self.final_state = outputs[-1]
+    with tf.variable_scope('OutputDropout'):
+        rnn_outputs = [tf.nn.dropout(x, self.dropout_placeholder) for x in outputs]
+    #raise NotImplementedError
     ### END YOUR CODE
     return rnn_outputs
 
@@ -250,6 +310,7 @@ class RNNLM_Model(LanguageModel):
               self.dropout_placeholder: dp}
       loss, state, _ = session.run(
           [self.calculate_loss, self.final_state, train_op], feed_dict=feed)
+      
       total_loss.append(loss)
       if verbose and step % verbose == 0:
           sys.stdout.write('\r{} / {} : pp = {}'.format(
@@ -280,13 +341,25 @@ def generate_text(session, model, config, starting_text='<eos>',
     output: List of word idxs
   """
   state = model.initial_state.eval()
+  #print np.mean(state), np.var(state)
   # Imagine tokens as a batch size of one, length of len(tokens[0])
   tokens = [model.vocab.encode(word) for word in starting_text.split()]
   for i in xrange(stop_length):
     ### YOUR CODE HERE
-    raise NotImplementedError
+    #raise NotImplementedError
+    print tokens[-1:]
+    feed_dict = {
+            model.input_placeholder : [tokens[-1:]],
+            model.initial_state : state,
+            model.dropout_placeholder : 1,
+        }
+    state, y_pred = session.run([model.final_state, model.predictions[-1]], feed_dict=feed_dict)
+    #print 'state: ', np.mean(state), np.var(state)
+    #print np.mean(state), np.var(state)
     ### END YOUR CODE
+    
     next_word_idx = sample(y_pred[0], temperature=temp)
+    
     tokens.append(next_word_idx)
     if stop_tokens and model.vocab.decode(tokens[-1]) in stop_tokens:
       break
@@ -304,11 +377,13 @@ def test_RNNLM():
 
   # We create the training model and generative model
   with tf.variable_scope('RNNLM') as scope:
+    #print '111'
     model = RNNLM_Model(config)
+    #print '222'
     # This instructs gen_model to reuse the same variables as the model above
     scope.reuse_variables()
     gen_model = RNNLM_Model(gen_config)
-
+    #print '333'
   init = tf.initialize_all_variables()
   saver = tf.train.Saver()
 
@@ -317,7 +392,7 @@ def test_RNNLM():
     best_val_epoch = 0
   
     session.run(init)
-    for epoch in xrange(config.max_epochs):
+    for epoch in xrange(0):
       print 'Epoch {}'.format(epoch)
       start = time.time()
       ###
@@ -335,10 +410,10 @@ def test_RNNLM():
         break
       print 'Total time: {}'.format(time.time() - start)
       
-    saver.restore(session, 'ptb_rnnlm.weights')
-    test_pp = model.run_epoch(session, model.encoded_test)
+    saver.restore(session, './ptb_rnnlm.weights')
+    #test_pp = model.run_epoch(session, model.encoded_test)
     print '=-=' * 5
-    print 'Test perplexity: {}'.format(test_pp)
+    #print 'Test perplexity: {}'.format(test_pp)
     print '=-=' * 5
     starting_text = 'in palo alto'
     while starting_text:

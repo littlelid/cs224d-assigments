@@ -92,7 +92,10 @@ class NERModel(LanguageModel):
     (Don't change the variable names)
     """
     ### YOUR CODE HERE
-    raise NotImplementedError
+    #raise NotImplementedError
+    self.input_placeholder = tf.placeholder(tf.int32,(None, self.config.window_size))
+    self.labels_placeholder = tf.placeholder(tf.float32, (None, self.config.label_size))
+    self.dropout_placeholder = tf.placeholder(tf.float32,)
     ### END YOUR CODE
 
   def create_feed_dict(self, input_batch, dropout, label_batch=None):
@@ -117,7 +120,14 @@ class NERModel(LanguageModel):
       feed_dict: The feed dictionary mapping from placeholders to values.
     """
     ### YOUR CODE HERE
-    raise NotImplementedError
+    
+    feed_dict = {
+                 self.input_placeholder : input_batch,
+                 self.dropout_placeholder : dropout
+                 }
+    if not label_batch is None:
+        feed_dict[self.labels_placeholder] = label_batch
+        
     ### END YOUR CODE
     return feed_dict
 
@@ -148,7 +158,13 @@ class NERModel(LanguageModel):
     # The embedding lookup is currently only implemented for the CPU
     with tf.device('/cpu:0'):
       ### YOUR CODE HERE
-      raise NotImplementedError
+      
+      embedding = tf.get_variable('embed', [len(self.wv), self.config.embed_size])
+      window = tf.nn.embedding_lookup(embedding, self.input_placeholder)
+      window = tf.reshape(window,(-1, self.config.window_size*self.config.embed_size ))
+      
+      
+      #raise NotImplementedError
       ### END YOUR CODE
       return window
 
@@ -180,7 +196,38 @@ class NERModel(LanguageModel):
       output: tf.Tensor of shape (batch_size, label_size)
     """
     ### YOUR CODE HERE
-    raise NotImplementedError
+    window_size = self.config.window_size
+    embed_size = self.config.embed_size
+    hidden_size = self.config.hidden_size
+    label_size = self.config.label_size
+    
+    with tf.variable_scope('Layer_1', initializer=xavier_weight_init()) as scope:
+        #W = tf.Variable(xavier_weight_init((window_size*embed_size, hidden_size)), name='weights')
+        #b1 = tf.Variable(xavier_weight_init((hidden_size,)), name='biases')
+       
+        W = tf.get_variable('W', [window_size*embed_size, hidden_size])
+        b1 = tf.get_variable('b1', [hidden_size,])
+        h = tf.nn.tanh(tf.matmul(window, W) + b1)
+        print '********'
+        print W.name, b1.name
+        if self.config.l2:
+            tf.add_to_collection('total_loss', 0.5 * self.config.l2 * tf.nn.l2_loss(W))
+            
+        
+    #
+    with tf.variable_scope('Layer_2', initializer=xavier_weight_init()) as scope:
+        U = tf.get_variable('U',[hidden_size, label_size])
+        b2 = tf.get_variable('b2',[label_size,])
+        y = tf.matmul(h, U) + b2
+        print U.name, b2.name
+        print '********'
+        if self.config.l2:
+            tf.add_to_collection('total_loss', 0.5 * self.config.l2 * tf.nn.l2_loss(U))
+        
+    output = tf.nn.dropout(y, keep_prob=self.dropout_placeholder)
+    
+    
+    #raise NotImplementedError
     ### END YOUR CODE
     return output 
 
@@ -195,7 +242,12 @@ class NERModel(LanguageModel):
       loss: A 0-d tensor (scalar)
     """
     ### YOUR CODE HERE
-    raise NotImplementedError
+    ce_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(y, self.labels_placeholder))
+    tf.add_to_collection('total_loss', ce_loss)
+    
+    loss = tf.add_n(tf.get_collection('total_loss'))
+    
+    #raise NotImplementedError
     ### END YOUR CODE
     return loss
 
@@ -219,7 +271,12 @@ class NERModel(LanguageModel):
       train_op: The Op for training.
     """
     ### YOUR CODE HERE
-    raise NotImplementedError
+    
+    optimizer = tf.train.AdamOptimizer(learning_rate=self.config.lr)
+    
+    train_op = optimizer.minimize(loss)
+    
+    #raise NotImplementedError
     ### END YOUR CODE
     return train_op
 
@@ -334,7 +391,10 @@ def test_NER():
     model = NERModel(config)
 
     init = tf.initialize_all_variables()
+    #init = tf.group(tf.initialize_all_variables(), tf.initialize_local_variables())
+    
     saver = tf.train.Saver()
+    
 
     with tf.Session() as session:
       best_val_loss = float('inf')
